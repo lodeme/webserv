@@ -285,13 +285,11 @@ void Response::generateResponse(const std::string& filename) {
 		moved_body[i] = body[i];
 	}
 	_content = _buffer;
-	_content_length = moved_body - _buffer + bytesRead;
+	_content_length = headers.size() + bytesRead;
 }
 
 void Response::generateDirectoryListing(const std::string& directoryPath) {
 	std::ostringstream listing;
-	std::string headers = _headersToString();
-	listing << headers;
 	DIR* dir = opendir(directoryPath.c_str());
 	if (dir == NULL) {
 		throw FileSystemErrorException("cannot open directory");
@@ -308,9 +306,13 @@ void Response::generateDirectoryListing(const std::string& directoryPath) {
 	listing << "</ul></body></html>";
 	std::memset(_buffer, 0, _buffer_size);
 	std::string list = listing.str();
-	std::memcpy(_buffer, list.c_str(), list.size());
+	addHeader("Content-Length", utils::to_string(list.size()));
+	std::string headers = _headersToString();
+	std::memcpy(_buffer, headers.c_str(), headers.size());
+	char *body = _buffer + headers.size();
+	std::memcpy(body, list.c_str(), list.size());
 	_content = _buffer;
-	_content_length = list.size();
+	_content_length = headers.size() + list.size();
 }
 
 void Response::generateCGIResponse(const std::string &cgi_response)

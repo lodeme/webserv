@@ -400,4 +400,3 @@ std::string Request::getScriptPath() const {
 
     return RemoveQueryString(fullPath);
 }
-

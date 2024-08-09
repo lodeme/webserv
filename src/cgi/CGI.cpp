@@ -15,7 +15,7 @@ CGIHandler::CGIHandler(const std::string& path, const Request& req, const Server
 CGIHandler::~CGIHandler() {
     if (envp) {
         for (int i = 0; envp[i] != NULL; i++) {
-            delete(envp[i]);
+            delete [] envp[i];
         }
         delete[] envp;
     }

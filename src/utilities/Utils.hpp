@@ -30,6 +30,7 @@ namespace utils {
 	// std::string generateDirectoryListing(const std::string& directoryPath);
 	std::time_t getCurrentTime();
 	std::string to_string(int value);
+	bool		fileExists(const std::string& path);
 }
 
 #endif

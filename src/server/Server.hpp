@@ -12,14 +12,15 @@
 # include <ctime>
 # include <cstdio>
 
+# include "../responses/Response.hpp"
 # include "../requests/Request.hpp"
 # include "../configuration/Config.hpp"
-# include "../responses/Response.hpp"
 # include "../cgi/CGI.hpp"
 
 # include "../include/debug.hpp"
 
 class Request;
+class Response;
 
 typedef std::vector<std::string> HostList;
 
@@ -28,8 +29,12 @@ typedef std::vector<std::string> HostList;
 # define REQUEST_TIMEOUT 10
 # define RESPONSE_MAX_BODY_SIZE 8000000
 
-class Server
-{
+struct Stream {
+	std::string boundary;
+	std::string unique_filename;
+};
+
+class Server {
 	public:
 		Server();
 		Server(const HostList &hosts, short port);
@@ -98,6 +103,7 @@ class Server
 		std::map<int, std::time_t>	_request_time;
 		char*						_buffer;
 		int							_buffer_size;
+		std::map<int, Stream>		_requests;
 
 		char*						_res_buffer;
 		int							_res_buffer_size;
@@ -110,6 +116,9 @@ class Server
 		void _setRequestTime(int client_socket);
 		bool _checkRequestTimeout(int client_socket);
 		void _cleanChunkFiles(int client_socket);
+		void _addNewClient(int client_socket);
+		void _requestHandling(Request &req, Response &res);
+		void _serveExistingClient(int client_socket, size_t i);
 };
 
 std::ostream &operator<<(std::ostream &os, const Server &server);

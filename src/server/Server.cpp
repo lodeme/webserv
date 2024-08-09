@@ -62,8 +62,97 @@ Server::~Server() {
     }
 }
 
-void Server::addPollfd(int socket_fd, short events) {
-	pollfd fd;
+void Server::_addNewClient(int client_socket)
+{
+	int new_client_socket = accept(_main_socketfd, (struct sockaddr *)&_address, (socklen_t*)&_address_len);
+	if (new_client_socket < 0) {
+			throw PollingErrorException(strerror(errno));
+		}
+	// Set socket to non-blocking mode
+	fcntl(client_socket, F_SETFL, O_NONBLOCK);
+	addPollfd(new_client_socket, POLLIN);
+	_setRequestTime(new_client_socket);
+	std::cout << "New connection established on fd: " << client_socket << std::endl;
+
+}
+
+void Server::_requestHandling(Request &req, Response &res)
+{
+	/* Parse request headers */
+	int bytesRead = req.parseHeaders();
+	/*************************/
+	if (req.isTargetingCGI()) {
+		std::string scriptPath = req.getScriptPath();
+		std::cout << "Attempting to execute CGI script at path: " << scriptPath << std::endl;
+
+		if (!utils::fileExists(scriptPath)) {
+			std::cerr << "CGI script not found at path: " << scriptPath << std::endl;
+			res = Response(_config, 404, _res_buffer, _res_buffer_size);
+		} else {
+			CGIHandler cgiHandler(scriptPath, req, _config);
+			std::string cgiOutput = cgiHandler.execute();
+			if (cgiOutput.empty()) {
+				std::cerr << "CGI script execution failed or exited with error status" << std::endl;
+				res = Response(_config, 500, _res_buffer, _res_buffer_size);
+			} else {
+				res.setStatus(200);
+				res.addHeader("Content-Type", "text/html");
+				res.generateCGIResponse(cgiOutput);
+				std::cout << "CGI response generated successfully." << std::endl;
+			}
+		}
+	} else {
+		/* Configure response */
+		res = Response(req, _config, _res_buffer, _res_buffer_size);
+		/*********************/
+		/* Parse request body */
+		if (res.getStatusCode() < 300 && req.getMethod() == "POST") {
+			req.parseBody(bytesRead);
+		}
+		/*********************/
+	}
+
+}
+
+void Server::_serveExistingClient(int client_socket, size_t i)
+{
+	Request req(client_socket, _config, _buffer, _buffer_size);
+	Response res(req, _config, _res_buffer, _res_buffer_size);
+	/* Request handling */
+	try {
+		_requestHandling(req, res);
+	} catch (Request::SocketCloseException &e) {
+		std::cout << e.what() << std::endl;
+		_cleanChunkFiles(client_socket);
+		_fds.erase(_fds.begin() + i);
+		return ;
+	} catch (Request::ParsingErrorException& e) {
+		if (e.type == Request::BAD_REQUEST)
+			res = Response(_config, 400, _res_buffer, _res_buffer_size);
+		else if (e.type == Request::CONTENT_LENGTH)
+			res = Response(_config, 413, _res_buffer, _res_buffer_size);
+		else if (e.type == Request::FILE_SYSTEM)
+			res = Response(_config, 500, _res_buffer, _res_buffer_size);
+		_cleanChunkFiles(client_socket);
+	}
+	/*******************/
+	if (res.getStatusCode() == -1)
+		res = Response(_config, 500, _res_buffer, _res_buffer_size);
+	/* Send response to client */
+	ssize_t sent = send(client_socket, res.getContent(), res.getContentLength(), MSG_DONTWAIT);
+	std::cout << res.getContentLength() - sent << std::endl;
+	/**************************/
+	int response_code = res.getStatusCode();
+	if (response_code >= 500 || response_code >= 400) {
+		_cleanChunkFiles(client_socket);
+		close(req.getSocket());
+		_fds.erase(_fds.begin() + i);
+	}
+}
+
+void Server::addPollfd(int socket_fd, short events)
+{
+    pollfd fd;
 	fd.fd = socket_fd;
 	fd.events = events;
 	fd.revents = 0;
@@ -133,14 +222,9 @@ size_t Server::getSocketsSize() const {
 	return _fds.size();
 }
 
-bool fileExists(const std::string& path) {
-    struct stat buffer;
-    return (stat(path.c_str(), &buffer) == 0);
-}
-
 void Server::pollLoop() {
-	for (size_t i = 0; i < getSocketsSize(); ++i) {			//loop to ckeck if revent is set
-		if (_fds[i].revents & POLLERR) {					//man poll
+	for (size_t i = 0; i < getSocketsSize(); ++i) {
+		if (_fds[i].revents & POLLERR) {
 			close(_main_socketfd);
 			throw PollingErrorException("error from poll() function");
 		}
@@ -148,84 +232,10 @@ void Server::pollLoop() {
 			int client_socket = _fds[i].fd;
 			if (client_socket != _main_socketfd)
 				_setRequestTime(client_socket);
-			if (client_socket == _main_socketfd) {			//if it is new connection
-				int new_client_socket = accept(_main_socketfd, (struct sockaddr *)&_address, (socklen_t*)&_address_len);
-				if (new_client_socket < 0) {
-						throw PollingErrorException(strerror(errno));
-					}
-				// Set socket to non-blocking mode
-				fcntl(client_socket, F_SETFL, O_NONBLOCK);
-				addPollfd(new_client_socket, POLLIN);
-				_setRequestTime(new_client_socket);
-				std::cout << "New connection established on fd: " << client_socket << std::endl;
-			} else {										//if it is existing connection
-				/* Request */
-				Request req(client_socket, _config, _buffer, _buffer_size);
-				Response res(req, _config, _res_buffer, _res_buffer_size);
-				try {
-					int bytesRead = req.parseHeaders();
-					if (req.isTargetingCGI()) {
-						std::string scriptPath = req.getScriptPath();
-						std::cout << "Attempting to execute CGI script at path: " << scriptPath << std::endl;
-
-						if (!fileExists(scriptPath)) { // passing uri including form data after "?" triggers if which yields 404
-							std::cerr << "CGI script not found at path: " << scriptPath << std::endl;
-							res = Response(_config, 404, _res_buffer, _res_buffer_size);
-						} else {
-							CGIHandler cgiHandler(scriptPath, req, _config);
-							std::string cgiOutput = cgiHandler.execute();
-							if (cgiOutput.empty()) {
-								std::cerr << "CGI script execution failed or exited with error status" << std::endl;
-								res = Response(_config, 500, _res_buffer, _res_buffer_size);
-							} else {
-								res.setStatus(200);
-								res.addHeader("Content-Type", "text/html");
-								res.generateCGIResponse(cgiOutput);
-								std::cout << "CGI response generated successfully." << std::endl;
-							}
-						}
-					} else {
-                        // Normal request handling
-						// std::cout << YELLOW << req << RESET << std::endl;
-						res = Response(req, _config, _res_buffer, _res_buffer_size);
-						if (res.getStatusCode() < 300 && req.getMethod() == "POST") {
-							req.parseBody(bytesRead);
-						}
-					}
-				} catch (Request::SocketCloseException &e) {
-					std::cout << e.what() << std::endl;
-					_cleanChunkFiles(client_socket);
-					_fds.erase(_fds.begin() + i);
-					continue ;
-				} catch (Request::ParsingErrorException& e) {
-					if (e.type == Request::BAD_REQUEST)
-						res = Response(_config, 405, _res_buffer, _res_buffer_size);
-					else if (e.type == Request::CONTENT_LENGTH)
-						res = Response(_config, 413, _res_buffer, _res_buffer_size);
-					else if (e.type == Request::FILE_SYSTEM)
-						res = Response(_config, 500, _res_buffer, _res_buffer_size);
-					_cleanChunkFiles(client_socket);
-				}
-				/* Debug print */
-				std::cout << YELLOW << req << RESET << std::endl;
-
-				/* Response */
-				if (res.getStatusCode() == -1)
-					res = Response(_config, 500, _res_buffer, _res_buffer_size); // Internal Server Error
-
-				// const char* response = res.toCString();
-				/* Debug print */
-				std::cout << CYAN << "Response sent:" << std::endl << res.getContent() << RESET << std::endl;
-
-				send(client_socket, res.getContent(), res.getContentLength(), MSG_DONTWAIT);
-
-
-				int response_code = res.getStatusCode();
-				if (response_code >= 500 || response_code >= 400) {
-					_cleanChunkFiles(client_socket);
-					close(req.getSocket());
-					_fds.erase(_fds.begin() + i);
-				}
+			if (client_socket == _main_socketfd) {
+				_addNewClient(client_socket);
+			} else {
+				_serveExistingClient(client_socket, i);
 			}
 		}
 	}

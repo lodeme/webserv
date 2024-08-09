@@ -116,26 +116,10 @@ int utils::stoi(const std::string &str)
 	return out;
 }
 
-// std::string utils::generateDirectoryListing(const std::string& directoryPath) {
-// 	std::ostringstream listing;
-// 	std::string headers;
-// 	listing << headers;
-// 	DIR* dir = opendir(directoryPath.c_str());
-// 	if (dir == NULL) {
-// 		return "Error opening directory";
-// 	}
-
-// 	struct dirent* entry;
-// 	listing << "<html><head><title>Index of " << directoryPath
-// 			<< "</title></head><body><h1>Index of " << directoryPath
-// 			<< "</h1><ul>";
-// 	while ((entry = readdir(dir)) != NULL) {
-// 		listing << "<li><a href=\"" << entry->d_name << "\">" << entry->d_name << "</a></li>";
-// 	}
-// 	closedir(dir);
-// 	listing << "</ul></body></html>";
-// 	return listing.str();
-// }
+bool utils::fileExists(const std::string& path) {
+    struct stat buffer;
+    return (stat(path.c_str(), &buffer) == 0);
+}
 
 std::time_t utils::getCurrentTime()
 {
